@@ -778,3 +778,174 @@ def handle_export_sort(server, request: Request) -> Response:
 def handle_export_loads(server, request: Request) -> Response:
     records = _plant(server).belt.loads()
     return csv_response(csv_export.render(csv_export.LOAD_COLUMNS, csv_export.load_rows(records)))
+
+
+def handle_export_handovers(server, request: Request) -> Response:
+    handovers = _plant(server).handovers.list_handovers()
+    return csv_response(
+        csv_export.render(csv_export.HANDOVER_COLUMNS, csv_export.handover_rows(handovers))
+    )
+
+
+def handle_export_shifts(server, request: Request) -> Response:
+    reports = _plant(server).reconciler.reports()
+    return csv_response(
+        csv_export.render(csv_export.SHIFT_REPORT_COLUMNS, csv_export.shift_rows(reports))
+    )
+
+
+# ---------------------------------------------------------------------------
+# shifts
+# ---------------------------------------------------------------------------
+
+
+def handle_list_shifts(server, request: Request) -> Response:
+    return json_response([shift.as_dict() for shift in _plant(server).handovers.list_shifts()])
+
+
+def handle_open_shift(server, request: Request) -> Response:
+    plant = _plant(server)
+    shift_id = request.str_field("id")
+    shift = plant.open_shift(request.required("label"), shift_id)
+    return json_response(shift.as_dict(), status=201)
+
+
+def handle_current_shift(server, request: Request) -> Response:
+    shift = _plant(server).handovers.current_shift()
+    if shift is None:
+        return json_response({"shift_id": "", "label": ""})
+    return json_response(shift.as_dict())
+
+
+def handle_open_shifts(server, request: Request) -> Response:
+    return json_response([shift.as_dict() for shift in _plant(server).handovers.open_shifts()])
+
+
+def handle_get_shift(server, request: Request) -> Response:
+    shift = _plant(server).handovers.get_shift(request.param("id"))
+    if shift is None:
+        return json_response({"error": "not found"}, status=404)
+    return json_response(shift.as_dict())
+
+
+def handle_close_shift(server, request: Request) -> Response:
+    return json_response(_plant(server).close_shift(request.param("id")).as_dict())
+
+
+def handle_shift_report(server, request: Request) -> Response:
+    plant = _plant(server)
+    shift_id = request.param("id")
+    plant.handovers.require_shift(shift_id)
+    return json_response(plant.reconciler.report(shift_id).as_dict())
+
+
+def handle_shift_handovers(server, request: Request) -> Response:
+    plant = _plant(server)
+    shift_id = request.param("id")
+    plant.handovers.require_shift(shift_id)
+    handovers = plant.handovers.for_shift(shift_id)
+    return json_response([handover.as_dict() for handover in handovers])
+
+
+def handle_shift_recompute(server, request: Request) -> Response:
+    plant = _plant(server)
+    shift_id = request.param("id")
+    plant.handovers.require_shift(shift_id)
+    return json_response(plant.handover_history.recompute(shift_id))
+
+
+# ---------------------------------------------------------------------------
+# handovers
+# ---------------------------------------------------------------------------
+
+
+def handle_list_handovers(server, request: Request) -> Response:
+    shift_id = request.query_str("shift_id")
+    handovers = (
+        _plant(server).handovers.for_shift(shift_id)
+        if shift_id
+        else _plant(server).handovers.list_handovers()
+    )
+    return json_response([handover.as_dict() for handover in handovers])
+
+
+def handle_start_handover(server, request: Request) -> Response:
+    plant = _plant(server)
+    handover = plant.start_handover(
+        request.required("shift_from"),
+        request.required("shift_to"),
+        request.required("policy"),
+        request.str_field("note"),
+    )
+    return json_response(handover.as_dict(), status=201)
+
+
+def handle_pending_handover(server, request: Request) -> Response:
+    handover = _plant(server).handovers.open_handover()
+    if handover is None:
+        return json_response({"error": "none"}, status=404)
+    return json_response(handover.as_dict())
+
+
+def handle_get_handover(server, request: Request) -> Response:
+    handover = _plant(server).handovers.get(request.param("id"))
+    if handover is None:
+        return json_response({"error": "not found"}, status=404)
+    return json_response(handover.as_dict())
+
+
+def handle_confirm_handover(server, request: Request) -> Response:
+    handover = _plant(server).confirm_handover(request.param("id"))
+    response = handover.as_dict()
+    response["reconciliation"] = _plant(server).reconciler.verify()
+    return json_response(response)
+
+
+def handle_rollback_handover(server, request: Request) -> Response:
+    plant = _plant(server)
+    handover = plant.rollback_handover(request.param("id"), request.str_field("note"))
+    response = handover.as_dict()
+    response["reconciliation"] = plant.reconciler.verify()
+    return json_response(response)
+
+
+def handle_handover_manifest(server, request: Request) -> Response:
+    plant = _plant(server)
+    handover = plant.handovers.require(request.param("id"))
+    return json_response(
+        {
+            "handover_id": handover.id,
+            "manifest_digest": handover.manifest_digest,
+            "summary": handover.summary,
+            "items": [item.as_dict() for item in handover.items],
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# in-progress inventory and reconciliation
+# ---------------------------------------------------------------------------
+
+
+def handle_in_progress(server, request: Request) -> Response:
+    plant = _plant(server)
+    shift_id = request.query_str("shift_id")
+    rows = plant.reconciler.inventory(shift_id)
+    return json_response({"count": len(rows), "items": rows})
+
+
+def handle_in_progress_counts(server, request: Request) -> Response:
+    return json_response(_plant(server).reconciler.inventory_counts())
+
+
+def handle_reconciliation(server, request: Request) -> Response:
+    plant = _plant(server)
+    verification = plant.reconciler.verify()
+    response: dict[str, object] = dict(verification)
+    response["audit_intact"] = plant.audit.verify()
+    response["ownership_conflicts"] = plant.handovers.ownership_conflicts()
+    response["reports"] = [report.as_dict() for report in plant.reconciler.reports()]
+    response["pending_handover"] = (
+        plant.handovers.open_handover().id if plant.handovers.open_handover() else ""
+    )
+    return json_response(response)

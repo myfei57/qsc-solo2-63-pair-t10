@@ -156,6 +156,30 @@ def route_table() -> list[Route]:
         Route("GET", "/api/export/audit.csv", "audit trail as CSV", "handle_export_audit"),
         Route("GET", "/api/export/sort.csv", "sort records as CSV", "handle_export_sort"),
         Route("GET", "/api/export/loads.csv", "load records as CSV", "handle_export_loads"),
+        Route("GET", "/api/export/handovers.csv", "handover history as CSV", "handle_export_handovers"),
+        Route("GET", "/api/export/shifts.csv", "per shift reports as CSV", "handle_export_shifts"),
+        # -- shifts -------------------------------------------------------
+        Route("GET", "/api/shifts", "list shifts", "handle_list_shifts"),
+        Route("POST", "/api/shifts", "open a shift", "handle_open_shift"),
+        Route("GET", "/api/shifts/current", "the shift owning new work", "handle_current_shift"),
+        Route("GET", "/api/shifts/open", "shifts still open", "handle_open_shifts"),
+        Route("GET", "/api/shifts/{id}", "read one shift", "handle_get_shift"),
+        Route("POST", "/api/shifts/{id}/close", "close a shift", "handle_close_shift"),
+        Route("GET", "/api/shifts/{id}/report", "per shift reconciliation report", "handle_shift_report"),
+        Route("GET", "/api/shifts/{id}/handovers", "handover ledger for a shift", "handle_shift_handovers"),
+        Route("GET", "/api/shifts/{id}/recompute", "recompute ownership from handover history", "handle_shift_recompute"),
+        # -- handovers ----------------------------------------------------
+        Route("GET", "/api/handovers", "list handover records", "handle_list_handovers"),
+        Route("POST", "/api/handovers", "start a handover", "handle_start_handover"),
+        Route("GET", "/api/handovers/pending", "the handover awaiting confirmation", "handle_pending_handover"),
+        Route("GET", "/api/handovers/{id}", "read one handover", "handle_get_handover"),
+        Route("POST", "/api/handovers/{id}/confirm", "receiver confirms the manifest", "handle_confirm_handover"),
+        Route("POST", "/api/handovers/{id}/rollback", "interrupt and restore ownership", "handle_rollback_handover"),
+        Route("GET", "/api/handovers/{id}/manifest", "frozen in-progress manifest", "handle_handover_manifest"),
+        # -- in-progress inventory ---------------------------------------
+        Route("GET", "/api/in-progress", "in-progress bags by shift", "handle_in_progress"),
+        Route("GET", "/api/in-progress/counts", "in-progress counts per shift", "handle_in_progress_counts"),
+        Route("GET", "/api/reconciliation", "three way consistency verdict", "handle_reconciliation"),
     ]
 
 

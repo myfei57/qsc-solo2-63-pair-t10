@@ -38,6 +38,12 @@ from bagsort.chute.assigner import ChuteAssigner
 from bagsort.chute.history import AssignmentHistory
 from bagsort.console.metrics import Metrics
 from bagsort.console.telemetry import Telemetry
+from bagsort.handover import (
+    HandoverHistory,
+    HandoverService,
+    Reconciler,
+    ShiftReportView,
+)
 
 DEFAULT_TERMINAL = "T1"
 
@@ -67,6 +73,10 @@ class Plant:
     recheck: RecheckQueue
     belt: Belt
     quota: QuotaBook
+    handovers: HandoverService
+    handover_history: HandoverHistory
+    reconciler: Reconciler
+    shift_view: ShiftReportView
     audit: AuditChain
     report: PlantReport
 
@@ -106,6 +116,11 @@ class Plant:
         recheck = RecheckQueue(store, book, clock)
         belt = Belt(store, clock, IdFactory("cmd"))
 
+        handover_service = HandoverService(store, clock)
+        handover_history = HandoverHistory(store)
+        reconciler = Reconciler(store)
+        shift_view = ShiftReportView(handover_service, reconciler)
+
         audit = AuditChain(store, clock, handling_line())
         audit_subscriber = _AuditSubscriber(audit)
         for topic in (
@@ -117,11 +132,16 @@ class Plant:
             "chute.assigned",
             "belt.switched",
             "bag.remapped",
+            "shift.opened",
+            "shift.closed",
+            "handover.started",
+            "handover.completed",
+            "handover.rolled_back",
         ):
             bus.subscribe(topic, audit_subscriber)
 
         report = PlantReport(
-            store, book, chutes, belt, quota, audit, namespace, handling_line()
+            store, book, chutes, belt, quota, audit, namespace, handling_line(), shift_view
         )
         return cls(
             store=store,
@@ -145,6 +165,10 @@ class Plant:
             recheck=recheck,
             belt=belt,
             quota=quota,
+            handovers=handover_service,
+            handover_history=handover_history,
+            reconciler=reconciler,
+            shift_view=shift_view,
             audit=audit,
             report=report,
         )
@@ -173,6 +197,7 @@ class Plant:
 
     def check_in(self, barcode: str, flight_id: str) -> Bag:
         bag = self.desk.check_in(barcode, flight_id)
+        bag = self._stamp_owner(bag)
         self.bus.publish("bag.checked_in", bag_id=bag.id, flight_id=flight_id)
         return bag
 
@@ -190,6 +215,7 @@ class Plant:
     def push_bag(self, bag_id: str, chute_id: str) -> SortRecord:
         bag = self.bag(bag_id)
         record = self.injector.push(bag, chute_id)
+        record = self._stamp_sort_shift(record)
         self.bus.publish("bag.sorted", bag_id=bag.id, chute_id=record.chute_id)
         return record
 
@@ -197,6 +223,16 @@ class Plant:
         bag = self.bag(bag_id)
         sorted_now = self.injector.retry(bag)
         if sorted_now:
+            self._stamp_sort_shift(
+                SortRecord(
+                    bag_id=bag.id,
+                    flight_id=bag.flight_id,
+                    chute_id=bag.chute_id,
+                    sequence=bag.sequence,
+                    epoch=bag.epoch,
+                    at="",
+                )
+            )
             self.bus.publish("bag.sorted", bag_id=bag.id, retry=True)
         return sorted_now
 
@@ -243,8 +279,109 @@ class Plant:
     def set_quota(self, flight_id: str, limit: int) -> int:
         return self.quota.set_limit(flight_id, limit)
 
+    # -- shift handover ----------------------------------------------------
+
+    def open_shift(self, label: str, shift_id: str = ""):
+        shift = self.handovers.open_shift(label, shift_id)
+        self.bus.publish("shift.opened", shift_id=shift.id, label=shift.label)
+        return shift
+
+    def close_shift(self, shift_id: str):
+        shift = self.handovers.close_shift(shift_id)
+        self.bus.publish("shift.closed", shift_id=shift.id)
+        return shift
+
+    def start_handover(self, shift_from: str, shift_to: str, policy: str, note: str = ""):
+        handover = self.handovers.start_handover(shift_from, shift_to, policy, note)
+        self.bus.publish(
+            "handover.started",
+            handover_id=handover.id,
+            shift_from=handover.shift_from,
+            shift_to=handover.shift_to,
+            policy=handover.policy,
+            responsibility=handover.responsibility,
+            in_progress=handover.summary.get("in_progress", 0),
+        )
+        return handover
+
+    def confirm_handover(self, handover_id: str):
+        handover = self.handovers.confirm_handover(handover_id)
+        self.bus.publish(
+            "handover.completed",
+            handover_id=handover.id,
+            shift_from=handover.shift_from,
+            shift_to=handover.shift_to,
+            policy=handover.policy,
+            responsibility=handover.responsibility,
+            in_progress=handover.summary.get("in_progress", 0),
+        )
+        return handover
+
+    def rollback_handover(self, handover_id: str, note: str = ""):
+        handover = self.handovers.rollback_handover(handover_id, note)
+        self.bus.publish(
+            "handover.rolled_back",
+            handover_id=handover.id,
+            shift_from=handover.shift_from,
+            shift_to=handover.shift_to,
+            policy=handover.policy,
+            responsibility=handover.responsibility,
+            restored=handover.summary.get("rollback_restored", 0),
+            resolved=handover.summary.get("rollback_resolved", 0),
+            note=handover.rollback_note,
+        )
+        return handover
+
     def verify(self) -> bool:
         return self.audit.verify()
+
+    # -- shift bookkeeping -------------------------------------------------
+
+    def _stamp_owner(self, bag: Bag) -> Bag:
+        """Attach a newly active bag to the shift currently responsible."""
+
+        shift_id = self.handovers.current_shift_id()
+        if not shift_id or bag.shift_id == shift_id:
+            return bag
+        updated = bag.evolved(shift_id=shift_id)
+        with self.store.session() as session:
+            session.state.bags[updated.id] = updated
+            session.record("bag.put", {"bag": updated.as_dict()}, self.clock.now_iso())
+        return updated
+
+    def _stamp_sort_shift(self, record: SortRecord) -> SortRecord:
+        """Book a sort record to the shift that dispatched it.
+
+        The materialised sort log and the shift report must reproduce each
+        other, so the record carries its dispatching shift and the bag keeps
+        that same owner while it is still active.
+        """
+
+        bag = self.bag(record.bag_id)
+        shift_id = bag.shift_id or self.handovers.current_shift_id()
+        state = self.store.state()
+        stored = next(
+            (item for item in reversed(state.sort_records) if item.bag_id == record.bag_id),
+            None,
+        )
+        if stored is None:
+            stored = record
+        if stored.shift_id == shift_id and bag.shift_id == shift_id:
+            return stored
+        updated_record = stored.__class__(**{**stored.as_dict(), "shift_id": shift_id})
+        at = self.clock.now_iso()
+        with self.store.session() as session:
+            session.state.sort_records = [
+                updated_record if item == stored else item for item in session.state.sort_records
+            ]
+            session.record(
+                "sort.replace_last", {"record": updated_record.as_dict()}, at
+            )
+            if shift_id and bag.shift_id != shift_id:
+                updated_bag = bag.evolved(shift_id=shift_id)
+                session.state.bags[updated_bag.id] = updated_bag
+                session.record("bag.put", {"bag": updated_bag.as_dict()}, at)
+        return updated_record
 
 
 class _AuditSubscriber:
@@ -259,6 +396,11 @@ class _AuditSubscriber:
         "chute.assigned": ("chute_assign", "chute"),
         "belt.switched": ("belt_switch", "belt"),
         "bag.remapped": ("remap", "checkin"),
+        "shift.opened": ("shift_open", "shift"),
+        "shift.closed": ("shift_close", "shift"),
+        "handover.started": ("handover_start", "handover"),
+        "handover.completed": ("handover_confirm", "handover"),
+        "handover.rolled_back": ("handover_rollback", "handover"),
     }
 
     def __init__(self, audit: AuditChain) -> None:
@@ -270,7 +412,9 @@ class _AuditSubscriber:
             raise ConflictError(f"no audit mapping for topic {event.topic!r}")
         kind, stage = mapping
         subject = str(
-            event.payload.get("bag_id")
+            event.payload.get("handover_id")
+            or event.payload.get("shift_id")
+            or event.payload.get("bag_id")
             or event.payload.get("flight_id")
             or event.payload.get("carousel")
             or ""
@@ -278,6 +422,6 @@ class _AuditSubscriber:
         detail = {
             key: value
             for key, value in event.payload.items()
-            if key not in {"bag_id", "flight_id"}
+            if key not in {"bag_id", "flight_id", "shift_id", "handover_id"}
         }
         self._audit.record(kind, subject, stage, detail)

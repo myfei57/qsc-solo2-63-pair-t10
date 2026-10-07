@@ -73,6 +73,7 @@ class Bag:
     flight_id: str = ""
     chute_id: str = ""
     state: BagState = BagState.CHECKED_IN
+    shift_id: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +84,7 @@ class Bag:
             "flight_id": self.flight_id,
             "chute_id": self.chute_id,
             "state": self.state.value,
+            "shift_id": self.shift_id,
         }
 
     @classmethod
@@ -95,6 +97,7 @@ class Bag:
             flight_id=str(raw.get("flight_id", "")),
             chute_id=str(raw.get("chute_id", "")),
             state=BagState(raw.get("state", BagState.CHECKED_IN.value)),
+            shift_id=str(raw.get("shift_id", "")),
         )
 
     def evolved(self, **changes: Any) -> "Bag":
@@ -162,6 +165,7 @@ class SortRecord:
     sequence: int
     epoch: int
     at: str
+    shift_id: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -171,6 +175,7 @@ class SortRecord:
             "sequence": self.sequence,
             "epoch": self.epoch,
             "at": self.at,
+            "shift_id": self.shift_id,
         }
 
     @classmethod
@@ -182,6 +187,7 @@ class SortRecord:
             sequence=int(raw.get("sequence", 0)),
             epoch=int(raw.get("epoch", 0)),
             at=str(raw.get("at", "")),
+            shift_id=str(raw.get("shift_id", "")),
         )
 
 
@@ -236,6 +242,124 @@ class LoadRecord:
             batch=int(raw.get("batch", 0)),
             at=str(raw.get("at", "")),
         )
+
+
+@dataclass(frozen=True)
+class Shift:
+    """One crew shift. Bags are owned by exactly one shift at a time."""
+
+    id: str
+    label: str
+    opened_at: str
+    closed_at: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "opened_at": self.opened_at,
+            "closed_at": self.closed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "Shift":
+        return cls(
+            id=str(raw["id"]),
+            label=str(raw.get("label", "")),
+            opened_at=str(raw.get("opened_at", "")),
+            closed_at=str(raw.get("closed_at", "")),
+        )
+
+    def evolved(self, **changes: Any) -> "Shift":
+        return replace(self, **changes)
+
+    @property
+    def open(self) -> bool:
+        return not self.closed_at
+
+
+@dataclass(frozen=True)
+class ManifestItem:
+    """One in-progress bag frozen onto a handover manifest."""
+
+    bag_id: str
+    state: str
+    shift_id: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"bag_id": self.bag_id, "state": self.state, "shift_id": self.shift_id}
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "ManifestItem":
+        return cls(
+            bag_id=str(raw["bag_id"]),
+            state=str(raw.get("state", "")),
+            shift_id=str(raw.get("shift_id", "")),
+        )
+
+
+@dataclass(frozen=True)
+class Handover:
+    """A shift handover. Ownership does not move until the receiver confirms.
+
+    ``policy`` selects who owns the in-progress bags and carries the matching
+    responsibility text:
+
+    * ``transfer`` — the receiving shift owns and answers for the bags;
+    * ``retain``   — the outgoing shift keeps ownership and responsibility.
+    """
+
+    id: str
+    shift_from: str
+    shift_to: str
+    status: str
+    policy: str
+    responsibility: str
+    started_at: str
+    manifest_digest: str = ""
+    items: tuple[ManifestItem, ...] = ()
+    summary: dict[str, Any] = field(default_factory=dict)
+    completed_at: str = ""
+    rolled_back_at: str = ""
+    rollback_note: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "shift_from": self.shift_from,
+            "shift_to": self.shift_to,
+            "status": self.status,
+            "policy": self.policy,
+            "responsibility": self.responsibility,
+            "started_at": self.started_at,
+            "manifest_digest": self.manifest_digest,
+            "items": [item.as_dict() for item in self.items],
+            "summary": _clean(self.summary),
+            "completed_at": self.completed_at,
+            "rolled_back_at": self.rolled_back_at,
+            "rollback_note": self.rollback_note,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "Handover":
+        return cls(
+            id=str(raw["id"]),
+            shift_from=str(raw.get("shift_from", "")),
+            shift_to=str(raw.get("shift_to", "")),
+            status=str(raw.get("status", "")),
+            policy=str(raw.get("policy", "")),
+            responsibility=str(raw.get("responsibility", "")),
+            started_at=str(raw.get("started_at", "")),
+            manifest_digest=str(raw.get("manifest_digest", "")),
+            items=tuple(ManifestItem.from_dict(item) for item in raw.get("items", [])),
+            summary=_clean(raw.get("summary", {})),
+            completed_at=str(raw.get("completed_at", "")),
+            rolled_back_at=str(raw.get("rolled_back_at", "")),
+            rollback_note=str(raw.get("rollback_note", "")),
+        )
+
+    def evolved(self, **changes: Any) -> "Handover":
+        return replace(self, **changes)
 
 
 @dataclass(frozen=True)

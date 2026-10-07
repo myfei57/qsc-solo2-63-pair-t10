@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from typing import Iterable, Sequence
 
 
@@ -41,6 +42,7 @@ def sort_rows(records: Iterable[object]) -> list[dict[str, object]]:
             "sequence": record.sequence,
             "epoch": record.epoch,
             "at": record.at,
+            "shift_id": getattr(record, "shift_id", ""),
         }
         for record in records
     ]
@@ -59,5 +61,50 @@ def load_rows(records: Iterable[object]) -> list[dict[str, object]]:
 
 
 AUDIT_COLUMNS = ("sequence", "kind", "subject", "stage", "at", "digest")
-SORT_COLUMNS = ("bag_id", "flight_id", "chute_id", "sequence", "epoch", "at")
+SORT_COLUMNS = ("bag_id", "flight_id", "chute_id", "sequence", "epoch", "at", "shift_id")
 LOAD_COLUMNS = ("bag_id", "carousel", "batch", "at")
+HANDOVER_COLUMNS = (
+    "id",
+    "shift_from",
+    "shift_to",
+    "status",
+    "policy",
+    "started_at",
+    "completed_at",
+    "rolled_back_at",
+    "in_progress",
+    "responsibility",
+)
+
+
+def handover_rows(handovers: Iterable[object]) -> list[dict[str, object]]:
+    return [
+        {
+            "id": handover.id,
+            "shift_from": handover.shift_from,
+            "shift_to": handover.shift_to,
+            "status": handover.status,
+            "policy": handover.policy,
+            "started_at": handover.started_at,
+            "completed_at": handover.completed_at,
+            "rolled_back_at": handover.rolled_back_at,
+            "in_progress": handover.summary.get("in_progress", 0),
+            "responsibility": handover.responsibility,
+        }
+        for handover in handovers
+    ]
+
+
+def shift_rows(reports: Iterable[object]) -> list[dict[str, object]]:
+    return [
+        {
+            "shift_id": report.shift_id,
+            "active": report.active,
+            "sorted_total": report.sorted_total,
+            "by_state": json.dumps(report.by_state, ensure_ascii=False, sort_keys=True),
+        }
+        for report in reports
+    ]
+
+
+SHIFT_REPORT_COLUMNS = ("shift_id", "active", "sorted_total", "by_state")

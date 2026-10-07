@@ -18,6 +18,7 @@ class PlantReport:
         audit: object,
         namespace: object,
         topology: object,
+        shift_view: object | None = None,
     ) -> None:
         self._store = store
         self._book = book
@@ -27,11 +28,12 @@ class PlantReport:
         self._audit = audit
         self._ns = namespace
         self._topology = topology
+        self._shift_view = shift_view
 
     def summary(self) -> dict[str, object]:
         flights = self._book.list()
         bags = list(self._store.state().bags.values())
-        return {
+        result = {
             "terminal": self._ns.terminal,
             "line": list(self._topology.stages),
             "flights": len(flights),
@@ -47,6 +49,9 @@ class PlantReport:
             "watermark": self._store.watermark,
             "quota": self._quota.limits(),
         }
+        if self._shift_view is not None:
+            result["shifts"] = self._shift_view.summary()
+        return result
 
     def flight_rows(self) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
@@ -81,4 +86,6 @@ class PlantReport:
             f"carousel          : {summary['carousel']} batch={summary['batch']}",
             f"journal watermark : {summary['watermark']}",
         ]
+        if self._shift_view is not None:
+            lines.append(self._shift_view.text().rstrip("\n"))
         return "\n".join(lines) + "\n"

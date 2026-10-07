@@ -15,8 +15,10 @@ from .entities import (
     Bag,
     ChuteAssignment,
     Flight,
+    Handover,
     LoadRecord,
     Sequence,
+    Shift,
     SortRecord,
     TransferCommand,
 )
@@ -42,6 +44,9 @@ class State:
     belt_carousel: str = ""
     belt_batch: int = 0
     belt_on_carousel: list[str] = field(default_factory=list)
+    shifts: dict[str, Shift] = field(default_factory=dict)
+    handovers: dict[str, Handover] = field(default_factory=dict)
+    duty_shift: str = ""
 
     def copy(self) -> "State":
         return State(
@@ -60,6 +65,9 @@ class State:
             belt_carousel=self.belt_carousel,
             belt_batch=self.belt_batch,
             belt_on_carousel=list(self.belt_on_carousel),
+            shifts=dict(self.shifts),
+            handovers=dict(self.handovers),
+            duty_shift=self.duty_shift,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -83,6 +91,11 @@ class State:
                 "batch": self.belt_batch,
                 "on_carousel": list(self.belt_on_carousel),
             },
+            "shifts": {key: value.as_dict() for key, value in sorted(self.shifts.items())},
+            "handovers": {
+                key: value.as_dict() for key, value in sorted(self.handovers.items())
+            },
+            "duty_shift": self.duty_shift,
         }
 
 def apply_entry(state: State, kind: str, payload: dict[str, Any]) -> None:
@@ -113,6 +126,12 @@ def apply_entry(state: State, kind: str, payload: dict[str, Any]) -> None:
         state.sequence = Sequence.from_dict(payload)
     elif kind == "sort.record":
         state.sort_records.append(SortRecord.from_dict(payload["record"]))
+    elif kind == "sort.replace_last":
+        replacement = SortRecord.from_dict(payload["record"])
+        for index in range(len(state.sort_records) - 1, -1, -1):
+            if state.sort_records[index].bag_id == replacement.bag_id:
+                state.sort_records[index] = replacement
+                break
     elif kind == "transfer.append":
         state.transfer_commands.append(TransferCommand.from_dict(payload["command"]))
     elif kind == "transfer.clear_before":
@@ -153,6 +172,14 @@ def apply_entry(state: State, kind: str, payload: dict[str, Any]) -> None:
         state.belt_on_carousel = []
         state.belt_carousel = str(payload.get("carousel", state.belt_carousel))
         state.belt_batch = int(payload.get("batch", state.belt_batch))
+    elif kind == "shift.put":
+        shift = Shift.from_dict(payload["shift"])
+        state.shifts[shift.id] = shift
+    elif kind == "handover.put":
+        handover = Handover.from_dict(payload["handover"])
+        state.handovers[handover.id] = handover
+    elif kind == "shift.set_duty":
+        state.duty_shift = str(payload.get("shift_id", ""))
     else:  # pragma: no cover - guards against a typo in a new command kind
         raise ValidationError(f"unknown journal command {kind!r}")
 

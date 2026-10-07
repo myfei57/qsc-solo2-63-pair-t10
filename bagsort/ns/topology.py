@@ -22,6 +22,11 @@ STAGES: tuple[str, ...] = (
     "audit",
 )
 
+# Governance steps are not positions on the physical handling line; they sit
+# outside it and order themselves after every plant stage for the timeline.
+GOVERNANCE_STAGES: tuple[str, ...] = ("shift", "handover")
+ALL_STAGES: tuple[str, ...] = STAGES[:-1] + GOVERNANCE_STAGES + ("audit",)
+
 
 @dataclass(frozen=True)
 class Topology:
@@ -29,15 +34,17 @@ class Topology:
 
     name: str
     stages: tuple[str, ...]
+    extra_stages: tuple[str, ...] = ()
 
     def index_of(self, stage: str) -> int:
+        ordered = self.stages + self.extra_stages
         try:
-            return self.stages.index(stage)
+            return ordered.index(stage)
         except ValueError:
             return -1
 
     def contains(self, stage: str) -> bool:
-        return stage in self.stages
+        return stage in self.stages or stage in self.extra_stages
 
     def before(self, first: str, second: str) -> bool:
         first_index = self.index_of(first)
@@ -49,16 +56,17 @@ class Topology:
             raise OrderingError(f"{first!r} must be handled before {second!r}")
 
     def next_stage(self, stage: str) -> str | None:
-        index = self.index_of(stage)
+        index = self.stages.index(stage) if stage in self.stages else -1
         if index < 0 or index + 1 >= len(self.stages):
             return None
         return self.stages[index + 1]
 
     def following(self, stage: str) -> tuple[str, ...]:
-        index = self.index_of(stage)
-        if index < 0:
+        try:
+            index = self.stages.index(stage)
+        except ValueError:
             return ()
-        return self.stages[index + 1 :]
+        return tuple(self.stages[index + 1 :])
 
     def describe(self) -> str:
         return " -> ".join(self.stages)
@@ -70,4 +78,4 @@ class Topology:
 def handling_line() -> Topology:
     """The canonical order of the baggage handling line."""
 
-    return Topology(name="handling", stages=STAGES)
+    return Topology(name="handling", stages=STAGES, extra_stages=GOVERNANCE_STAGES)
