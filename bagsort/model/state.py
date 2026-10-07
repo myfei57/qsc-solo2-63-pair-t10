@@ -15,8 +15,10 @@ from .entities import (
     Bag,
     ChuteAssignment,
     Flight,
+    Handover,
     LoadRecord,
     Sequence,
+    Shift,
     SortRecord,
     TransferCommand,
 )
@@ -42,6 +44,9 @@ class State:
     belt_carousel: str = ""
     belt_batch: int = 0
     belt_on_carousel: list[str] = field(default_factory=list)
+    shifts: dict[str, Shift] = field(default_factory=dict)
+    bag_owners: dict[str, str] = field(default_factory=dict)
+    handovers: dict[str, Handover] = field(default_factory=dict)
 
     def copy(self) -> "State":
         return State(
@@ -60,6 +65,9 @@ class State:
             belt_carousel=self.belt_carousel,
             belt_batch=self.belt_batch,
             belt_on_carousel=list(self.belt_on_carousel),
+            shifts=dict(self.shifts),
+            bag_owners=dict(self.bag_owners),
+            handovers=dict(self.handovers),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -83,6 +91,9 @@ class State:
                 "batch": self.belt_batch,
                 "on_carousel": list(self.belt_on_carousel),
             },
+            "shifts": {key: value.as_dict() for key, value in sorted(self.shifts.items())},
+            "bag_owners": dict(sorted(self.bag_owners.items())),
+            "handovers": {key: value.as_dict() for key, value in sorted(self.handovers.items())},
         }
 
 def apply_entry(state: State, kind: str, payload: dict[str, Any]) -> None:
@@ -107,6 +118,7 @@ def apply_entry(state: State, kind: str, payload: dict[str, Any]) -> None:
     elif kind == "bag.remove":
         state.bags.pop(str(payload["bag_id"]), None)
         state.mappings.pop(str(payload["bag_id"]), None)
+        state.bag_owners.pop(str(payload["bag_id"]), None)
     elif kind == "mapping.put":
         state.mappings[str(payload["bag_id"])] = str(payload["flight_id"])
     elif kind == "sequence.put":
@@ -153,6 +165,19 @@ def apply_entry(state: State, kind: str, payload: dict[str, Any]) -> None:
         state.belt_on_carousel = []
         state.belt_carousel = str(payload.get("carousel", state.belt_carousel))
         state.belt_batch = int(payload.get("batch", state.belt_batch))
+    elif kind == "shift.put":
+        shift = Shift.from_dict(payload["shift"])
+        state.shifts[shift.id] = shift
+    elif kind == "bag.owner.put":
+        bag_id = str(payload["bag_id"])
+        shift_id = str(payload.get("shift_id", ""))
+        if shift_id:
+            state.bag_owners[bag_id] = shift_id
+        else:
+            state.bag_owners.pop(bag_id, None)
+    elif kind == "handover.put":
+        handover = Handover.from_dict(payload["handover"])
+        state.handovers[handover.id] = handover
     else:  # pragma: no cover - guards against a typo in a new command kind
         raise ValidationError(f"unknown journal command {kind!r}")
 

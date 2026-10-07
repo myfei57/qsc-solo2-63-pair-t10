@@ -276,7 +276,7 @@ def handle_check_in(server, request: Request) -> Response:
 
 def handle_check_in_batch(server, request: Request) -> Response:
     entries = [Entry.from_dict(item) for item in request.list_payload() if isinstance(item, dict)]
-    bags = _plant(server).desk.check_in_batch(entries)
+    bags = _plant(server).check_in_batch(entries)
     return json_response([bag.as_dict() for bag in bags], status=201)
 
 
@@ -758,6 +758,115 @@ def handle_rollback(server, request: Request) -> Response:
     plant = _plant(server)
     dropped = plant.store.rollback()
     return json_response({"dropped": dropped, "pending": len(plant.store.pending())})
+
+
+# ---------------------------------------------------------------------------
+# shifts and handovers
+# ---------------------------------------------------------------------------
+
+
+def handle_list_shifts(server, request: Request) -> Response:
+    shifts = _plant(server).store.state().shifts
+    return json_response([shifts[key].as_dict() for key in sorted(shifts)])
+
+
+def handle_open_shift(server, request: Request) -> Response:
+    shift = _plant(server).open_shift(request.required("shift_id"), request.str_field("code"))
+    return json_response(shift.as_dict(), status=201)
+
+
+def handle_current_shift(server, request: Request) -> Response:
+    shift = _plant(server).shifts.current()
+    if shift is None:
+        return json_response({"error": "empty"}, status=404)
+    return json_response(shift.as_dict())
+
+
+def handle_get_shift(server, request: Request) -> Response:
+    return json_response(_plant(server).shifts.require(request.param("id")).as_dict())
+
+
+def handle_close_shift(server, request: Request) -> Response:
+    return json_response(_plant(server).close_shift(request.param("id")).as_dict())
+
+
+def handle_shift_bags(server, request: Request) -> Response:
+    return json_response(_plant(server).shifts.held_bags(request.param("id")))
+
+
+def handle_attribute_bag(server, request: Request) -> Response:
+    bag = _plant(server).attribute_bag(
+        request.required("bag_id"), request.required("shift_id")
+    )
+    return json_response(bag.as_dict())
+
+
+def handle_list_handovers(server, request: Request) -> Response:
+    shift_id = request.query_str("shift_id")
+    handovers = (
+        _plant(server).handovers.for_shift(shift_id) if shift_id else _plant(server).handovers.list()
+    )
+    return json_response([handover.as_dict() for handover in handovers])
+
+
+def handle_propose_handover(server, request: Request) -> Response:
+    handover = _plant(server).propose_handover(
+        request.required("outgoing_shift_id"),
+        request.required("incoming_shift_id"),
+        request.str_field("policy", "transfer"),
+        request.str_field("note"),
+    )
+    return json_response(handover.as_dict(), status=201)
+
+
+def handle_get_handover(server, request: Request) -> Response:
+    return json_response(_plant(server).handovers.get(request.param("id")).as_dict())
+
+
+def handle_handover_inventory(server, request: Request) -> Response:
+    handover_id = request.param("id")
+    manager = _plant(server).handovers
+    handover = manager.get(handover_id)
+    return json_response(
+        {
+            "handover_id": handover_id,
+            "state": handover.state.value,
+            "digest": handover.inventory_digest,
+            "intact": manager.verify_inventory(handover_id),
+            "items": [item.as_dict() for item in manager.inventory(handover_id)],
+        }
+    )
+
+
+def handle_confirm_handover(server, request: Request) -> Response:
+    return json_response(_plant(server).confirm_handover(request.param("id")).as_dict())
+
+
+def handle_rollback_handover(server, request: Request) -> Response:
+    return json_response(_plant(server).rollback_handover(request.param("id")).as_dict())
+
+
+def handle_handover_history(server, request: Request) -> Response:
+    versions = _plant(server).handover_history.versions(request.param("id"))
+    return json_response([handover.as_dict() for handover in versions])
+
+
+def handle_shift_handover_history(server, request: Request) -> Response:
+    return json_response(
+        _plant(server).handover_history.recompute(request.param("id"))
+    )
+
+
+def handle_shift_reports(server, request: Request) -> Response:
+    shift_id = request.query_str("shift_id")
+    sheet = _plant(server).sheet
+    if shift_id:
+        return json_response(sheet.shift_report(shift_id))
+    return json_response(sheet.reports())
+
+
+def handle_shift_reconcile(server, request: Request) -> Response:
+    return json_response(_plant(server).sheet.reconcile())
 
 
 # ---------------------------------------------------------------------------

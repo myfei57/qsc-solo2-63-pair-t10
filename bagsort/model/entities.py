@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .enums import BagState, FlightState
+from .enums import BagState, CustodyPolicy, FlightState, HandoverState, ShiftState
 
 
 def _clean(raw: Any) -> Any:
@@ -249,6 +249,141 @@ class Sequence:
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Sequence":
         return cls(epoch=int(raw.get("epoch", 0)), next_value=int(raw.get("next", 0)))
+
+
+@dataclass(frozen=True)
+class Shift:
+    """One working shift. A shift owns every in-process bag checked in while it runs."""
+
+    id: str
+    code: str
+    state: ShiftState = ShiftState.OPEN
+    opened_at: str = ""
+    closed_at: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "code": self.code,
+            "state": self.state.value,
+            "opened_at": self.opened_at,
+            "closed_at": self.closed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "Shift":
+        return cls(
+            id=str(raw["id"]),
+            code=str(raw.get("code", "")),
+            state=ShiftState(raw.get("state", ShiftState.OPEN.value)),
+            opened_at=str(raw.get("opened_at", "")),
+            closed_at=str(raw.get("closed_at", "")),
+        )
+
+    def evolved(self, **changes: Any) -> "Shift":
+        return replace(self, **changes)
+
+
+@dataclass(frozen=True)
+class HandoverItem:
+    """One in-process bag frozen into a handover inventory."""
+
+    bag_id: str
+    flight_id: str
+    state: str
+    chute_id: str = ""
+    owner_shift_id: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "bag_id": self.bag_id,
+            "flight_id": self.flight_id,
+            "state": self.state,
+            "chute_id": self.chute_id,
+            "owner_shift_id": self.owner_shift_id,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "HandoverItem":
+        return cls(
+            bag_id=str(raw["bag_id"]),
+            flight_id=str(raw.get("flight_id", "")),
+            state=str(raw.get("state", "")),
+            chute_id=str(raw.get("chute_id", "")),
+            owner_shift_id=str(raw.get("owner_shift_id", "")),
+        )
+
+
+@dataclass(frozen=True)
+class Handover:
+    """One shift handover: an inventory, a chosen custody policy and its lifecycle.
+
+    The inventory digest is computed over the frozen items at proposal time, so a
+    console caller can recompute it later and prove the inventory, the sort
+    records and the shift report all describe the same handover. Ownership moves
+    only on confirmation; rolling back a proposed handover restores the owners
+    captured in ``owners_before``.
+    """
+
+    id: str
+    outgoing_shift_id: str
+    incoming_shift_id: str
+    state: HandoverState = HandoverState.PROPOSED
+    policy: CustodyPolicy = CustodyPolicy.TRANSFER
+    responsibility: str = ""
+    items: tuple[HandoverItem, ...] = field(default_factory=tuple)
+    owners_before: dict[str, str] = field(default_factory=dict)
+    inventory_digest: str = ""
+    sort_watermark: int = 0
+    sort_count: int = 0
+    proposed_at: str = ""
+    confirmed_at: str = ""
+    rolled_back_at: str = ""
+    note: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "outgoing_shift_id": self.outgoing_shift_id,
+            "incoming_shift_id": self.incoming_shift_id,
+            "state": self.state.value,
+            "policy": self.policy.value,
+            "responsibility": self.responsibility,
+            "items": [item.as_dict() for item in self.items],
+            "owners_before": dict(sorted(self.owners_before.items())),
+            "inventory_digest": self.inventory_digest,
+            "sort_watermark": self.sort_watermark,
+            "sort_count": self.sort_count,
+            "proposed_at": self.proposed_at,
+            "confirmed_at": self.confirmed_at,
+            "rolled_back_at": self.rolled_back_at,
+            "note": self.note,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "Handover":
+        return cls(
+            id=str(raw["id"]),
+            outgoing_shift_id=str(raw.get("outgoing_shift_id", "")),
+            incoming_shift_id=str(raw.get("incoming_shift_id", "")),
+            state=HandoverState(raw.get("state", HandoverState.PROPOSED.value)),
+            policy=CustodyPolicy(raw.get("policy", CustodyPolicy.TRANSFER.value)),
+            responsibility=str(raw.get("responsibility", "")),
+            items=tuple(HandoverItem.from_dict(item) for item in raw.get("items", [])),
+            owners_before={
+                str(key): str(value) for key, value in dict(raw.get("owners_before", {})).items()
+            },
+            inventory_digest=str(raw.get("inventory_digest", "")),
+            sort_watermark=int(raw.get("sort_watermark", 0)),
+            sort_count=int(raw.get("sort_count", 0)),
+            proposed_at=str(raw.get("proposed_at", "")),
+            confirmed_at=str(raw.get("confirmed_at", "")),
+            rolled_back_at=str(raw.get("rolled_back_at", "")),
+            note=str(raw.get("note", "")),
+        )
+
+    def evolved(self, **changes: Any) -> "Handover":
+        return replace(self, **changes)
 
 
 @dataclass(frozen=True)

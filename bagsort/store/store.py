@@ -88,6 +88,8 @@ class Store:
             "transfer_commands": len(state.transfer_commands),
             "load_records": len(state.load_records),
             "audit": len(state.audit),
+            "shifts": len(state.shifts),
+            "handovers": len(state.handovers),
         }
 
     # -- write side --------------------------------------------------------

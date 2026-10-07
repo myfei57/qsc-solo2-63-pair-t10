@@ -46,7 +46,30 @@ class PlantReport:
             "batch": self._belt.batch(),
             "watermark": self._store.watermark,
             "quota": self._quota.limits(),
+            "shifts": len(self._store.state().shifts),
+            "open_shift": (
+                self._store.state().shifts[current].code
+                if (current := self._open_shift_id())
+                else ""
+            ),
+            "pending_handover": self._pending_handover_id(),
         }
+
+    def _open_shift_id(self) -> str:
+        opens = [
+            shift_id
+            for shift_id, shift in self._store.state().shifts.items()
+            if shift.state.value == "open"
+        ]
+        return sorted(opens)[-1] if opens else ""
+
+    def _pending_handover_id(self) -> str:
+        proposed = [
+            handover.id
+            for handover in self._store.state().handovers.values()
+            if handover.state.value == "proposed"
+        ]
+        return sorted(proposed)[-1] if proposed else ""
 
     def flight_rows(self) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
@@ -79,6 +102,8 @@ class PlantReport:
             f"sort records      : {summary['sort_records']}",
             f"audit entries     : {summary['audit_entries']} intact={summary['audit_intact']}",
             f"carousel          : {summary['carousel']} batch={summary['batch']}",
+            f"shifts            : {summary['shifts']} on duty={summary['open_shift'] or '-'}",
+            f"pending handover  : {summary['pending_handover'] or '-'}",
             f"journal watermark : {summary['watermark']}",
         ]
         return "\n".join(lines) + "\n"
